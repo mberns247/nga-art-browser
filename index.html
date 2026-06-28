@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>NGA Collection</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <style>
@@ -21,7 +23,8 @@ canvas.grabbing { cursor: grabbing; }
 .prog-fill { height: 100%; background: rgba(255,255,255,0.65); border-radius: 1px; transition: width 0.25s; }
 
 #ctrl {
-  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: max(20px, env(safe-area-inset-bottom, 20px));
+  left: 50%; transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: stretch; gap: 10px;
   background: rgba(18,18,18,0.92); border: 0.5px solid rgba(255,255,255,0.12);
   border-radius: 16px; padding: 12px 18px;
@@ -54,22 +57,36 @@ canvas.grabbing { cursor: grabbing; }
 #lb {
   display: none; position: fixed; inset: 0;
   background: rgba(0,0,0,0.82); z-index: 30;
-  align-items: center; justify-content: center; padding: 2rem;
+  align-items: flex-end; justify-content: center;
+  padding: 0;
 }
 #lb.open { display: flex; }
 #lbbox {
-  background: #181818; border-radius: 14px; border: 0.5px solid rgba(255,255,255,0.1);
-  max-width: 700px; width: 100%; max-height: 88vh; overflow-y: auto; position: relative;
+  background: #181818; border-radius: 14px 14px 0 0;
+  border: 0.5px solid rgba(255,255,255,0.1); border-bottom: none;
+  width: 100%; max-width: 700px;
+  max-height: 90svh; overflow-y: auto; position: relative;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
-#lbimg { width: 100%; max-height: 420px; object-fit: contain; background: #111; border-radius: 14px 14px 0 0; display: block; }
-#lbbody { padding: 1.25rem 1.5rem 1.5rem; display: flex; flex-direction: column; gap: 6px; }
-#lbtitle { font-size: 16px; font-weight: 500; }
+#lbimg { width: 100%; max-height: 45svh; object-fit: contain; background: #111; display: block; }
+#lbbody { padding: 1rem 1.25rem 1.25rem; display: flex; flex-direction: column; gap: 6px; }
+#lbtitle { font-size: 16px; font-weight: 500; padding-right: 44px; }
 #lbmeta { font-size: 13px; color: rgba(255,255,255,0.4); line-height: 1.6; }
 #lbdesc { font-size: 12px; color: rgba(255,255,255,0.28); line-height: 1.65; margin-top: 4px; }
-#lblink { display: inline-block; margin-top: 10px; padding: 7px 14px; border-radius: 8px; background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.65); text-decoration: none; font-size: 13px; align-self: flex-start; }
+#lblink { display: inline-block; margin-top: 10px; padding: 10px 16px; border-radius: 8px; background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.65); text-decoration: none; font-size: 13px; align-self: flex-start; }
 #lblink:hover { background: rgba(255,255,255,0.14); }
-#lbclose { position: absolute; top: 12px; right: 14px; background: none; border: none; color: rgba(255,255,255,0.35); font-size: 24px; cursor: pointer; line-height: 1; }
-#lbclose:hover { color: rgba(255,255,255,0.8); }
+#lbclose {
+  position: absolute; top: 10px; right: 10px;
+  width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.08); border: none; border-radius: 50%;
+  color: rgba(255,255,255,0.6); font-size: 20px; cursor: pointer;
+}
+#lbclose:hover { background: rgba(255,255,255,0.15); color: #fff; }
+@media (min-width: 600px) {
+  #lb { align-items: center; padding: 1.5rem; }
+  #lbbox { border-radius: 14px; border-bottom: 0.5px solid rgba(255,255,255,0.1); max-height: 88svh; }
+  #lbimg { max-height: 420px; border-radius: 14px 14px 0 0; }
+}
 </style>
 </head>
 <body>
@@ -273,8 +290,10 @@ function buildMosaic(resetCamera) {
   }
   mCtx.putImageData(imgData, 0, 0);
 
-  MIN_ZOOM = Math.min(W / COLS, H / ROWS);
-  MAX_ZOOM = Math.min(W, H) * 0.95;
+  const vw = W || window.innerWidth || 1200;
+  const vh = H || window.innerHeight || 800;
+  MIN_ZOOM = Math.min(vw / COLS, vh / ROWS);
+  MAX_ZOOM = Math.min(vw, vh) * 0.95;
   if (resetCamera) {
     zoom = MIN_ZOOM;
     centerPan();
@@ -371,7 +390,7 @@ function scheduleLoad(uuid, url) {
   if (imgCache.has(uuid) || loading.has(uuid) || loading.size >= MAX_CONCURRENT) return;
   loading.add(uuid);
   const img = new Image();
-  img.crossOrigin = 'anonymous';
+  // no crossOrigin — we only draw, never read pixels; setting it blocks loads if server omits CORS headers
   img.onload  = () => { imgCache.set(uuid, img); loading.delete(uuid); requestRender(); };
   img.onerror = () => { loading.delete(uuid); imgCache.set(uuid, null); };
   img.src = url;
@@ -439,18 +458,24 @@ canvas.addEventListener('touchmove', e => {
     requestRender();
   } else if (e.touches.length >= 2 && touch2) {
     const a = e.touches[0], b = e.touches[1];
-    const dist  = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-    const midX  = (a.clientX + b.clientX) / 2;
-    const midY  = (a.clientY + b.clientY) / 2;
-    const scale = dist / touch2.dist;
-    const newZ  = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, touch2.zoom * scale));
-    const ratio = newZ / touch2.zoom;
-    const offX  = Math.max(0, (W - COLS * touch2.zoom) / 2);
-    const offY  = Math.max(0, (H - ROWS * touch2.zoom) / 2);
-    panX = ratio * touch2.px + (ratio - 1) * (touch2.midX - offX) - (midX - touch2.midX);
-    panY = ratio * touch2.py + (ratio - 1) * (touch2.midY - offY) - (midY - touch2.midY);
+    const newDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const newMidX = (a.clientX + b.clientX) / 2;
+    const newMidY = (a.clientY + b.clientY) / 2;
+
+    // Incremental: each frame applies delta from previous frame, no anchor drift
+    const factor = newDist / touch2.dist;
+    const newZ   = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
+    const ratio  = newZ / zoom;
+    const offX   = Math.max(0, (W - COLS * zoom) / 2);
+    const offY   = Math.max(0, (H - ROWS * zoom) / 2);
+    panX = ratio * panX + (ratio - 1) * (touch2.midX - offX) - (newMidX - touch2.midX);
+    panY = ratio * panY + (ratio - 1) * (touch2.midY - offY) - (newMidY - touch2.midY);
     zoom = newZ;
     clampPan();
+
+    touch2.dist = newDist;
+    touch2.midX = newMidX;
+    touch2.midY = newMidY;
     requestRender();
   }
 }, { passive: false });
