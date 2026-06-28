@@ -384,8 +384,11 @@ function syncSlider() {
 
 function applyZoom(newZ, cx, cy) {
   newZ = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZ));
-  panX += cx * (1 - newZ / zoom);
-  panY += cy * (1 - newZ / zoom);
+  const ratio = newZ / zoom;
+  const offX = Math.max(0, (W - COLS * zoom) / 2);
+  const offY = Math.max(0, (H - ROWS * zoom) / 2);
+  panX = ratio * panX + (ratio - 1) * (cx - offX);
+  panY = ratio * panY + (ratio - 1) * (cy - offY);
   zoom = newZ;
   clampPan();
   requestRender();
