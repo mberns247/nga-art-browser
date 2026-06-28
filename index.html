@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NGA Collection</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0c0c0c; overflow: hidden; font-family: system-ui, sans-serif; color: #fff; }
+canvas { display: block; cursor: grab; }
+canvas.grabbing { cursor: grabbing; }
+
+#overlay {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: #0c0c0c; z-index: 20; gap: 14px;
+}
+.load-label { font-size: 14px; color: rgba(255,255,255,0.5); }
+.load-detail { font-size: 12px; color: rgba(255,255,255,0.22); min-height: 18px; }
+.prog-wrap { width: 240px; height: 2px; background: #2a2a2a; border-radius: 1px; }
+.prog-fill { height: 100%; background: rgba(255,255,255,0.65); border-radius: 1px; transition: width 0.25s; }
+
+#ctrl {
+  position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 14px;
+  background: rgba(18,18,18,0.88); border: 0.5px solid rgba(255,255,255,0.1);
+  border-radius: 999px; padding: 9px 20px;
+}
+.lbl { font-size: 11px; color: rgba(255,255,255,0.3); user-select: none; }
+#zslider {
+  -webkit-appearance: none; width: 200px; height: 2px;
+  background: rgba(255,255,255,0.18); border-radius: 1px; outline: none; cursor: pointer;
+}
+#zslider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px;
+  border-radius: 50%; background: #fff; cursor: pointer;
+}
+
+#hint {
+  position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; color: rgba(255,255,255,0.25); pointer-events: none; text-align: center;
+  transition: opacity 0.4s;
+}
+
+#lb {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.82); z-index: 30;
+  align-items: center; justify-content: center; padding: 2rem;
+}
+#lb.open { display: flex; }
+#lbbox {
+  background: #181818; border-radius: 14px; border: 0.5px solid rgba(255,255,255,0.1);
+  max-width: 700px; width: 100%; max-height: 88vh; overflow-y: auto; position: relative;
+}
+#lbimg { width: 100%; max-height: 420px; object-fit: contain; background: #111; border-radius: 14px 14px 0 0; display: block; }
+#lbbody { padding: 1.25rem 1.5rem 1.5rem; display: flex; flex-direction: column; gap: 6px; }
+#lbtitle { font-size: 16px; font-weight: 500; }
+#lbmeta { font-size: 13px; color: rgba(255,255,255,0.4); line-height: 1.6; }
+#lbdesc { font-size: 12px; color: rgba(255,255,255,0.28); line-height: 1.65; margin-top: 4px; }
+#lblink { display: inline-block; margin-top: 10px; padding: 7px 14px; border-radius: 8px; background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.65); text-decoration: none; font-size: 13px; align-self: flex-start; }
+#lblink:hover { background: rgba(255,255,255,0.14); }
+#lbclose { position: absolute; top: 12px; right: 14px; background: none; border: none; color: rgba(255,255,255,0.35); font-size: 24px; cursor: pointer; line-height: 1; }
+#lbclose:hover { color: rgba(255,255,255,0.8); }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="overlay">
+  <div class="load-label" id="lstatus">Loading collection…</div>
+  <div class="prog-wrap"><div class="prog-fill" id="pbar" style="width:0"></div></div>
+  <div class="load-detail" id="ldetail"> </div>
+</div>
+
+<div id="hint"></div>
+
+<div id="ctrl">
+  <span class="lbl">all</span>
+  <input type="range" id="zslider" min="0" max="1000" value="0">
+  <span class="lbl">one</span>
+  <div style="width:0.5px;height:16px;background:rgba(255,255,255,0.15)"></div>
+  <input type="search" id="filter" placeholder="filter by description…"
+    style="background:transparent;border:none;outline:none;color:rgba(255,255,255,0.7);font-size:13px;width:180px;caret-color:#fff"
+    autocomplete="off">
+</div>
+
+<div id="lb">
+  <div id="lbbox">
+    <button id="lbclose">×</button>
+    <img id="lbimg" src="" alt="">
+    <div id="lbbody">
+      <div id="lbtitle"></div>
+      <div id="lbmeta"></div>
+      <div id="lbdesc"></div>
+      <a id="lblink" href="" target="_blank" rel="noopener">View on NGA website</a>
+    </div>
+  </div>
+</div>
+
+<script>
+const OBJECTS_URL = 'https://raw.githubusercontent.com/NationalGalleryOfArt/opendata/main/data/objects.csv';
+const IMAGES_URL  = 'https://raw.githubusercontent.com/NationalGalleryOfArt/opendata/main/data/published_images.csv';
+
+// ── Color detection from image description text ─────────────────────────────
+const BUCKETS = [
+  { key:   0, rgb: [185, 40, 40],   words: ['red','crimson','scarlet','ruby','maroon','vermilion','carmine','burgundy','brick','cherry','wine','claret'] },
+  { key:  22, rgb: [200,105, 45],   words: ['orange','amber','rust','copper','terracotta','terra cotta','coral','ginger','burnt orange','sienna'] },
+  { key:  52, rgb: [200,180, 45],   words: ['yellow','gold','golden','ochre','mustard','lemon','saffron','straw','canary','butter'] },
+  { key:  90, rgb: [ 95,165, 50],   words: ['lime','chartreuse','yellow-green'] },
+  { key: 120, rgb: [ 45,130, 55],   words: ['green','olive','emerald','sage','moss','jade','forest','mint','viridian','grass','fern','pine'] },
+  { key: 165, rgb: [ 35,140,110],   words: ['seafoam','sea green','teal green'] },
+  { key: 180, rgb: [ 30,150,148],   words: ['teal','turquoise','aqua','cyan','peacock','verdigris'] },
+  { key: 205, rgb: [ 65,145,205],   words: ['sky blue','cerulean','powder blue','cornflower','periwinkle','slate blue'] },
+  { key: 220, rgb: [ 35, 78,182],   words: ['blue','navy','azure','cobalt','indigo','ultramarine','prussian','sapphire','midnight blue','lapis'] },
+  { key: 270, rgb: [112, 50,172],   words: ['purple','violet','lavender','lilac','plum','mauve','amethyst','heliotrope'] },
+  { key: 318, rgb: [200, 50,132],   words: ['magenta','fuchsia','hot pink','raspberry'] },
+  { key: 345, rgb: [205, 92,112],   words: ['pink','rose','blush','salmon','peach','flesh'] },
+  { key: 405, rgb: [122, 85, 55],   words: ['brown','tan','beige','umber','sepia','mahogany','chestnut','chocolate','khaki','buff','caramel','clay','walnut','tawny'] },
+  { key: 455, rgb: [235,232,222],   words: ['white','cream','ivory','alabaster','eggshell','snow'] },
+  { key: 495, rgb: [155,153,147],   words: ['gray','grey','silver','slate','ash','pewter','charcoal','stone','neutral'] },
+  { key: 545, rgb: [ 33, 32, 32],   words: ['black','ebony','jet','onyx','soot','pitch'] },
+];
+
+function detectColor(desc) {
+  if (!desc) return { key: 620, rgb: [55, 55, 55] };
+  const t = desc.toLowerCase();
+  let best = null, bestScore = 0;
+  for (const b of BUCKETS) {
+    let score = 0;
+    for (const w of b.words) {
+      let p = -1;
+      while ((p = t.indexOf(w, p + 1)) !== -1) score++;
+    }
+    if (score > bestScore) { bestScore = score; best = b; }
+  }
+  return best || { key: 620, rgb: [55, 55, 55] };
+}
+
+// ── State ────────────────────────────────────────────────────────────────────
+let objectMap = {};
+let allItems = []; // full sorted set
+let items = [];    // filtered view
+let COLS = 0, ROWS = 0;
+let mosaic = null; // pre-rendered color grid (offscreen canvas)
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+
+let zoom = 1;
+let panX = 0, panY = 0;
+let MIN_ZOOM = 1, MAX_ZOOM = 800;
+const THUMB_THRESHOLD = 7;  // px per cell to start loading thumbnails
+const CLICK_THRESHOLD = 20; // px per cell to allow clicks
+
+const imgCache = new Map();
+const loading  = new Set();
+const MAX_CONCURRENT = 16;
+
+let objCount = 0, imgCount = 0;
+function progress(pct, status, detail) {
+  document.getElementById('pbar').style.width = pct + '%';
+  if (status !== undefined) document.getElementById('lstatus').textContent = status;
+  if (detail !== undefined) document.getElementById('ldetail').textContent = detail;
+}
+
+// ── Data loading (parallel) ─────────────────────────────────────────────────
+async function loadData() {
+  const rawImages = [];
+  const seen = new Set();
+
+  await Promise.all([
+    new Promise((res, rej) => {
+      Papa.parse(OBJECTS_URL, {
+        download: true, header: true, skipEmptyLines: true,
+        step({ data: d }) {
+          const id = d.objectid && d.objectid.trim();
+          if (!id) return;
+          objectMap[id] = {
+            title: d.title ? d.title.trim() : '',
+            attribution: d.attribution ? d.attribution.trim() : '',
+            date: d.displaydate ? d.displaydate.trim() : '',
+            medium: d.medium ? d.medium.trim() : '',
+          };
+          if (++objCount % 8000 === 0) tick();
+        },
+        complete: res, error: rej,
+      });
+    }),
+    new Promise((res, rej) => {
+      Papa.parse(IMAGES_URL, {
+        download: true, header: true, skipEmptyLines: true,
+        step({ data: d }) {
+          if (d.viewtype && d.viewtype !== 'primary') return;
+          const objId = d.depictstmsobjectid && d.depictstmsobjectid.trim();
+          if (!objId || seen.has(objId)) return;
+          seen.add(objId);
+          rawImages.push({
+            uuid: d.uuid && d.uuid.trim(),
+            objectId: objId,
+            desc: d.assistivetext || '',
+            thumb: d.iiifthumburl || `https://api.nga.gov/iiif/${d.uuid}/full/!200,200/0/default.jpg`,
+          });
+          if (++imgCount % 5000 === 0) tick();
+        },
+        complete: res, error: rej,
+      });
+    }),
+  ]);
+
+  function tick() {
+    const pct = Math.min(92, (objCount / 280000) * 46 + (imgCount / 130000) * 46);
+    progress(pct, undefined, `${(objCount + imgCount).toLocaleString()} records…`);
+  }
+
+  finalize(rawImages);
+}
+
+function finalize(rawImages) {
+  progress(93, 'Sorting by color…', '');
+
+  // Detect color and sort
+  for (const img of rawImages) {
+    const c = detectColor(img.desc);
+    img.colorKey = c.key;
+    img.rgb      = c.rgb;
+  }
+  rawImages.sort((a, b) => a.colorKey - b.colorKey);
+  allItems = rawImages;
+  items = allItems;
+
+  buildMosaic(true);
+
+
+  progress(100, '', '');
+  setTimeout(() => {
+    document.getElementById('overlay').style.display = 'none';
+    setHint(`${items.length.toLocaleString()} works sorted by color · scroll to zoom · drag to pan · click when zoomed in`);
+  }, 200);
+
+  requestRender();
+}
+
+function buildMosaic(resetCamera) {
+  progress(96, 'Building mosaic…', '');
+  const w = W || window.innerWidth  || window.screen.width  || 1200;
+  const h = H || window.innerHeight || window.screen.height || 800;
+  const aspect = w / h;
+  COLS = Math.max(10, Math.round(Math.sqrt(items.length * aspect)) | 0);
+  ROWS = Math.max(1,  Math.ceil(items.length / COLS) | 0);
+
+  mosaic = document.createElement('canvas');
+  mosaic.width  = COLS;
+  mosaic.height = ROWS;
+  const mCtx = mosaic.getContext('2d');
+  const imgData = mCtx.createImageData(COLS, ROWS);
+  const px = imgData.data;
+  for (let i = 0; i < items.length; i++) {
+    const [r, g, b] = items[i].rgb;
+    px[i*4]   = r;
+    px[i*4+1] = g;
+    px[i*4+2] = b;
+    px[i*4+3] = 255;
+  }
+  mCtx.putImageData(imgData, 0, 0);
+
+  MIN_ZOOM = Math.min(W / COLS, H / ROWS);
+  MAX_ZOOM = Math.min(W, H) * 0.95;
+  if (resetCamera) {
+    zoom = MIN_ZOOM;
+    centerPan();
+  } else {
+    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+    clampPan();
+  }
+}
+
+function applyFilter(word) {
+  const q = word.trim().toLowerCase();
+  items = q ? allItems.filter(it => it.desc.toLowerCase().includes(q)) : allItems;
+  buildMosaic(false);
+  const label = q ? `${items.length.toLocaleString()} matching "${q}"` : `${allItems.length.toLocaleString()} works`;
+  setHint(label);
+  requestRender();
+}
+
+// ── Canvas ───────────────────────────────────────────────────────────────────
+function resizeCanvas() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+
+function centerPan() {
+  const gridW = COLS * zoom, gridH = ROWS * zoom;
+  panX = Math.max(0, (gridW - W) / 2);
+  panY = Math.max(0, (gridH - H) / 2);
+  clampPan();
+}
+
+function clampPan() {
+  const gridW = COLS * zoom, gridH = ROWS * zoom;
+  panX = gridW <= W ? 0 : Math.max(0, Math.min(gridW - W, panX));
+  panY = gridH <= H ? 0 : Math.max(0, Math.min(gridH - H, panY));
+}
+
+// ── Render ───────────────────────────────────────────────────────────────────
+let rafPending = false;
+function requestRender() {
+  if (!rafPending) { rafPending = true; requestAnimationFrame(render); }
+}
+
+function render() {
+  rafPending = false;
+  ctx.clearRect(0, 0, W, H);
+  if (!mosaic) return;
+
+  const gridW = COLS * zoom, gridH = ROWS * zoom;
+  const offX = Math.max(0, (W - gridW) / 2);
+  const offY = Math.max(0, (H - gridH) / 2);
+
+  // Draw the color mosaic scaled to current zoom/pan
+  const srcX  = panX / zoom;
+  const srcY  = panY / zoom;
+  const visW  = Math.min(COLS, (W - offX * 2) / zoom);
+  const visH  = Math.min(ROWS, (H - offY * 2) / zoom);
+
+  ctx.imageSmoothingEnabled = zoom < 5;
+  ctx.drawImage(mosaic, srcX, srcY, visW, visH, offX, offY, visW * zoom, visH * zoom);
+
+  // Overlay thumbnails when zoomed in enough
+  if (zoom >= THUMB_THRESHOLD) {
+    const gap      = Math.max(1, Math.round(zoom * 0.04));
+    const cellSize = zoom - gap;
+
+    const c0 = Math.max(0, Math.floor(panX / zoom));
+    const r0 = Math.max(0, Math.floor(panY / zoom));
+    const c1 = Math.min(COLS - 1, Math.ceil((panX + W) / zoom));
+    const r1 = Math.min(ROWS - 1, Math.ceil((panY + H) / zoom));
+
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const idx = r * COLS + c;
+        if (idx >= items.length) continue;
+        const item = items[idx];
+        const x = Math.round(offX + c * zoom - panX);
+        const y = Math.round(offY + r * zoom - panY);
+        const img = imgCache.get(item.uuid);
+        if (img && img.complete && img.naturalWidth > 0) {
+          ctx.drawImage(img, x, y, cellSize, cellSize);
+        } else {
+          scheduleLoad(item.uuid, item.thumb);
+        }
+      }
+    }
+  }
+
+  syncSlider();
+}
+
+// ── Image loading ─────────────────────────────────────────────────────────────
+function scheduleLoad(uuid, url) {
+  if (imgCache.has(uuid) || loading.has(uuid) || loading.size >= MAX_CONCURRENT) return;
+  loading.add(uuid);
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload  = () => { imgCache.set(uuid, img); loading.delete(uuid); requestRender(); };
+  img.onerror = () => { loading.delete(uuid); imgCache.set(uuid, null); };
+  img.src = url;
+}
+
+// ── Zoom ─────────────────────────────────────────────────────────────────────
+const SLIDER_STEPS = 1000;
+
+function sliderToZoom(v) {
+  return MIN_ZOOM * Math.pow(MAX_ZOOM / MIN_ZOOM, v / SLIDER_STEPS);
+}
+function zoomToSlider(z) {
+  return SLIDER_STEPS * Math.log(z / MIN_ZOOM) / Math.log(MAX_ZOOM / MIN_ZOOM);
+}
+function syncSlider() {
+  document.getElementById('zslider').value = Math.round(zoomToSlider(zoom));
+}
+
+function applyZoom(newZ, cx, cy) {
+  newZ = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZ));
+  panX += cx * (1 - newZ / zoom);
+  panY += cy * (1 - newZ / zoom);
+  zoom = newZ;
+  clampPan();
+  requestRender();
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  applyZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientX, e.clientY);
+}, { passive: false });
+
+// Pinch zoom
+let lastPinchDist = null;
+canvas.addEventListener('touchstart', e => {
+  if (e.touches.length === 2) lastPinchDist = pinchDist(e);
+});
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (e.touches.length === 2 && lastPinchDist) {
+    const d = pinchDist(e);
+    const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+    const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+    applyZoom(zoom * d / lastPinchDist, cx, cy);
+    lastPinchDist = d;
+  }
+}, { passive: false });
+canvas.addEventListener('touchend', () => { lastPinchDist = null; });
+function pinchDist(e) {
+  const dx = e.touches[0].clientX - e.touches[1].clientX;
+  const dy = e.touches[0].clientY - e.touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+let drag = null;
+canvas.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  drag = { x: e.clientX, y: e.clientY, px: panX, py: panY, moved: false };
+  canvas.classList.add('grabbing');
+});
+window.addEventListener('mousemove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+  panX = drag.px - dx;
+  panY = drag.py - dy;
+  clampPan();
+  requestRender();
+});
+window.addEventListener('mouseup', e => {
+  if (!drag) return;
+  canvas.classList.remove('grabbing');
+  if (!drag.moved && zoom >= CLICK_THRESHOLD) {
+    const gridW = COLS * zoom, gridH = ROWS * zoom;
+    const offX = Math.max(0, (W - gridW) / 2);
+    const offY = Math.max(0, (H - gridH) / 2);
+    const col = Math.floor((e.clientX - offX + panX) / zoom);
+    const row = Math.floor((e.clientY - offY + panY) / zoom);
+    const idx = row * COLS + col;
+    if (idx >= 0 && idx < items.length) openLightbox(items[idx]);
+  }
+  drag = null;
+});
+
+document.getElementById('zslider').addEventListener('input', e => {
+  const newZ = sliderToZoom(Number(e.target.value));
+  applyZoom(newZ, W / 2, H / 2);
+});
+
+let filterTimer;
+document.getElementById('filter').addEventListener('input', e => {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => applyFilter(e.target.value), 400);
+});
+
+window.addEventListener('resize', () => {
+  resizeCanvas();
+  if (items.length) {
+    MIN_ZOOM = Math.min(W / COLS, H / ROWS);
+    MAX_ZOOM = Math.min(W, H) * 0.95;
+    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+    clampPan();
+  }
+  requestRender();
+});
+
+// ── Lightbox ──────────────────────────────────────────────────────────────────
+function openLightbox(item) {
+  const obj = objectMap[item.objectId] || {};
+  document.getElementById('lbimg').src = `https://api.nga.gov/iiif/${item.uuid}/full/!800,800/0/default.jpg`;
+  document.getElementById('lbtitle').textContent = obj.title || 'Untitled';
+  document.getElementById('lbmeta').textContent  = [obj.attribution, obj.date, obj.medium].filter(Boolean).join(' · ');
+  document.getElementById('lbdesc').textContent  = item.desc || '';
+  document.getElementById('lblink').href = `https://www.nga.gov/collection/art-object-page.${item.objectId}.html`;
+  document.getElementById('lb').classList.add('open');
+}
+document.getElementById('lbclose').onclick = closeLightbox;
+document.getElementById('lb').addEventListener('click', e => { if (e.target === e.currentTarget) closeLightbox(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+function closeLightbox() { document.getElementById('lb').classList.remove('open'); }
+
+// ── Hint ──────────────────────────────────────────────────────────────────────
+let hintTimer;
+function setHint(text) {
+  const el = document.getElementById('hint');
+  el.textContent = text;
+  el.style.opacity = '1';
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { el.style.opacity = '0'; }, 5000);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+resizeCanvas();
+loadData().catch(err => {
+  document.getElementById('lstatus').textContent = 'Failed: ' + err.message;
+  document.getElementById('pbar').style.background = '#a00';
+});
+</script>
+</body>
+</html>
